@@ -10,6 +10,7 @@ A simple cross-platform desktop application to calculate flash **Guide Number**,
   -  Distance
 - Supports both **Meters** and **Feet**
 - Supports **ISO adjustment**
+- Flash Power Adjustment (from **1/1** to **1/8192** in **1/3 EV steps**)
 - Accepts **European decimals** (`,` or `.`)
 - Input validation with helpful error messages
 - Clean UI with real-time results
