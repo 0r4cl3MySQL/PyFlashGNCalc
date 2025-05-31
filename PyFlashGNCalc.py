@@ -139,13 +139,32 @@ class MainFrame ( wx.Frame ):
         # Text label add to ISO HorizontalBox
         HB_ISO.Add( self.Txt_ISO, 0, wx.ALL|wx.ALIGN_CENTER_VERTICAL, 5 )
 
-        # noinspection PyTypeChecker
-        HB_ISO.Add( ( 118, 0), 0, wx.EXPAND, 5 )
-
         # TextControl for ISO setup
         self.TxtCTRL_ISO = wx.TextCtrl( SBV_ParametersSizer.GetStaticBox(), wx.ID_ANY,
                                         wx.EmptyString, wx.DefaultPosition, wx.DefaultSize, 0 )
         HB_ISO.Add( self.TxtCTRL_ISO, 1, wx.ALL|wx.EXPAND, 5 )
+
+        # Splitter for ISO and FlashPower ChoiceBox
+        self.SplitterISOPower = wx.StaticLine( SBV_ParametersSizer.GetStaticBox(), wx.ID_ANY, wx.DefaultPosition,
+                                               wx.DefaultSize, wx.LI_VERTICAL )
+        HB_ISO.Add( self.SplitterISOPower, 0, wx.EXPAND |wx.ALL, 5 )
+
+        # Text label for FlashPower
+        self.Txt_FlashPower = wx.StaticText( SBV_ParametersSizer.GetStaticBox(), wx.ID_ANY, _(u"Flash Power:"),
+                                             wx.DefaultPosition, wx.DefaultSize, 0 )
+        self.Txt_FlashPower.Wrap( -1 )
+
+        # Text label add to ISO HorizontalBox
+        HB_ISO.Add( self.Txt_FlashPower, 0, wx.ALL|wx.ALIGN_CENTER_VERTICAL, 5 )
+
+        # FlashPower ChoiceBox setup
+        ChB_FlashPowerChoices = []
+        self.ChB_FlashPower = wx.Choice( SBV_ParametersSizer.GetStaticBox(), wx.ID_ANY,
+                                         wx.DefaultPosition, wx.DefaultSize, ChB_FlashPowerChoices, 0 )
+        self.ChB_FlashPower.SetSelection( 0 )
+
+        # ChoiceBox add to ISO HorizontalBox
+        HB_ISO.Add( self.ChB_FlashPower, 0, wx.ALL, 5 )
 
         # StaticBox sizer add to ISO HorizontalBox
         SBV_ParametersSizer.Add( HB_ISO, 0, wx.EXPAND, 5 )
@@ -292,12 +311,71 @@ class MainFrame ( wx.Frame ):
         self.RBtn_GN.SetValue(True)
         self.RBtn_Meters.SetValue(True)
 
+        # Bind FlashPower ChoiceBox to update with each Change
+        self.ChB_FlashPower.Bind(wx.EVT_CHOICE, self.Calculate)
+
         # Initial calculation
         self.OnModeChange(None)
+
+        # Populate our FlashPower ChoiceBox
+        self.PopulateFlashPowerChoices()
 
     # Clean Up any mess
     def __del__( self ):
         pass
+
+    # Populate our FlashPower ChoiceBox
+    def PopulateFlashPowerChoices(self):
+        FlashPower= []
+        FullStops = [1 / (2 ** i) for i in range(14)]  # From 1/1 to 1/8192
+
+        for i, BasePower in enumerate(FullStops):
+            if i > 0:
+                base_label = f"1/{int(1 / BasePower)}"
+            else:
+                base_label = "1/1"
+
+            # Full stop
+            FlashPower.append(base_label)
+
+            # 1/3 and 2/3 steps (except for the last one: 1/8192)
+            if i < len(FullStops) - 1:
+                FlashPower.append(f"{base_label} -1/3")
+                FlashPower.append(f"{base_label} -2/3")
+
+        # noinspection PyArgumentList
+        self.ChB_FlashPower.SetItems(FlashPower)
+        self.ChB_FlashPower.SetSelection(0)  # Default to full power
+
+    # Returns GN scaling multiplier based on flash power selection
+    def GetFlashPowerFactor(self):
+
+        label = self.ChB_FlashPower.GetStringSelection()
+
+        # Remove any "*" marker or whitespace
+        label = label.replace("*", "").strip()
+
+        # Match formats like '1/1', '1/1 -1/3', '1/2 -2/3'
+        parts = label.split()
+        base_part = parts[0]  # e.g., '1/1'
+        fraction = eval(base_part)  # '1/2' → 0.5
+
+        ev_offset = 0  # in thirds
+        if len(parts) > 1:
+            if parts[1] == '-1/3':
+                ev_offset = 1
+            elif parts[1] == '-2/3':
+                ev_offset = 2
+
+        # Each full stop is 1 EV = halve the power = GN ÷ √2
+        # So: power_fraction = actual fraction
+        #      GN scale = sqrt(power_fraction)
+        # Plus 1/3 EV reductions:
+        ev_steps = math.log2(1 / fraction) + ev_offset / 3
+        adjusted_fraction = 1 / (2 ** (ev_steps))  # flash power factor
+        GN_Factor = math.sqrt(adjusted_fraction)
+        print(GN_Factor)
+        return GN_Factor
 
     # Detect in which mode we are and change Text accordingly
     def OnModeChange(self, event):
@@ -352,38 +430,44 @@ class MainFrame ( wx.Frame ):
 
     # Calculate results based on source data
     def Calculate(self, event):
-        Value1 = self.ParseFloat(self.TxtCTRL_F.GetValue())
-        Value2 = self.ParseFloat(self.TxtCTRL_Distance.GetValue())
+        ValueFNumber = self.ParseFloat(self.TxtCTRL_F.GetValue())
+        ValueDistance = self.ParseFloat(self.TxtCTRL_Distance.GetValue())
 
         # Check if our 2 Values are valid or not
-        if Value1 is None or Value2 is None:
+        if ValueFNumber is None or ValueDistance is None:
             self.Txt_Results.SetLabel("Result: Please enter valid numbers.")
             return
 
         # Get ISO from GetISOFactor function
         ISO_Factor = self.GetISOFactor()
-
+        PowerFactor = self.GetFlashPowerFactor()
         # Determine selected mode
         if self.RBtn_GN.GetValue():  # Calculate GN
-            Distance = self.ConvertDistance(Value2)
-            Result = Value1 * Distance * ISO_Factor
+            Distance = self.ConvertDistance(ValueDistance)
+            Result = ValueFNumber * Distance * ISO_Factor * PowerFactor
             self.Txt_Results.SetLabel(f"Result: Guide Number = {Result:.2f}")
 
         elif self.RBtn_F.GetValue():  # Calculate F-Number
-            Distance = self.ConvertDistance(Value2)
+            Distance = self.ConvertDistance(ValueDistance)
             if Distance == 0:
                 self.Txt_Results.SetLabel("Result: Distance can't be zero.")
                 return
-            GN_Adjusted = Value1 * ISO_Factor
+
+            GN_Adjusted = ValueFNumber * ISO_Factor * PowerFactor
             Result = GN_Adjusted / Distance
-            self.Txt_Results.SetLabel(f"Result: F-Number = {Result:.2f}")
+
+            # Check if Aperture is not Unrealistically wide for results
+            if Result < 0.95:
+                self.Txt_Results.SetLabel("Result: Aperture required is unrealistically wide (F < 1.0)")
+            else:
+                self.Txt_Results.SetLabel(f"Result: F-Number = {Result:.2f}")
 
         else:  # Calculate Distance
-            if Value2 == 0:
+            if ValueDistance == 0:
                 self.Txt_Results.SetLabel("Result: F-Number can't be zero.")
                 return
-            GN_Adjusted = Value1 * ISO_Factor
-            Distance = GN_Adjusted / Value1
+            GN_Adjusted = ValueFNumber * ISO_Factor * PowerFactor
+            Distance = GN_Adjusted / ValueDistance
             if self.RBtn_Feet.GetValue():
                 Distance /= 0.3048
                 self.Txt_Results.SetLabel(f"Result: Distance = {Distance:.2f} ft")
@@ -397,7 +481,7 @@ class MainFrame ( wx.Frame ):
         dlg = wx.MessageDialog(
             self,
             "Are you sure you want to quit?",
-            "Quit PyUInstaller",
+            "Quit PyFlashGNCalc",
             wx.YES_NO | wx.NO_DEFAULT | wx.ICON_QUESTION
         )
 
